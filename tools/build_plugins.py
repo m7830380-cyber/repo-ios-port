@@ -4,7 +4,7 @@
 
 1. builds RepoShim.dll (shim/) and the patcher (tools/patcher)
 2. patches the retail assemblies into --out
-3. builds RepoIOS.dll (mod/) against them (game internals via a publicized copy in mod/obj, never shipped)
+3. builds RepoIOS.dll (mod/) against them
 4. writes Unity .meta files (iOS only, not loaded in the Editor)
 
 --out is the private repo's Plugins folder; CI checks it out into shell/Assets/Plugins/Game.
@@ -75,10 +75,8 @@ def main():
     shim = os.path.join(ROOT, 'shim', 'bin', 'Release', 'netstandard2.1', 'RepoShim.dll')
     patcher = os.path.join(ROOT, 'tools', 'patcher', 'bin', 'Release', 'net8.0', 'RepoPatcher.dll')
     run('dotnet', patcher, 'patch', managed, shim, out)
-    ref = os.path.join(ROOT, 'mod', 'obj', 'gameref')
-    run('dotnet', patcher, 'publicize', os.path.join(out, 'Assembly-CSharp.dll'), os.path.join(ref, 'Assembly-CSharp.dll'))
     run('dotnet', 'build', os.path.join(ROOT, 'mod'), '-c', 'Release', '-nologo', '-v', 'q',
-        f'-p:ManagedDir={managed}', f'-p:GameAsmDir={out}', f'-p:RefAsmDir={ref}')
+        f'-p:ManagedDir={managed}', f'-p:GameAsmDir={out}')
     shutil.copyfile(os.path.join(ROOT, 'mod', 'bin', 'Release', 'netstandard2.1', 'RepoIOS.dll'), os.path.join(out, 'RepoIOS.dll'))
 
     n = 0

@@ -50,6 +50,7 @@ namespace RepoIOS
                     go.AddComponent<TouchHud>();
                 }
                 go.AddComponent<Lifecycle>();
+                if (TouchEnabled) Autotest.StartIfRequested(go);
                 Log.Info($"touch controls={TouchEnabled} targetFrameRate={Application.targetFrameRate}");
 
                 SceneManager.sceneLoaded += (s, mode) =>

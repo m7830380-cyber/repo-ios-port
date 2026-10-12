@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <!-- iOS runtime additions (touch controls, log, overlay). Compiled against the patched retail assemblies
-       (game types via a publicized reference copy, never shipped) and shipped next to them as a plugin. -->
+       (the patcher makes the few game internals the mod reads public) and shipped next to them as a plugin. -->
   <PropertyGroup>
     <TargetFramework>netstandard2.1</TargetFramework>
     <LangVersion>9.0</LangVersion>
@@ -11,12 +11,10 @@
     <ManagedDir Condition="'$(ManagedDir)' == ''">C:\Program Files (x86)\Steam\steamapps\common\REPO\REPO_Data\Managed</ManagedDir>
     <!-- patched game assemblies + RepoShim (tools/build_plugins.py output) -->
     <GameAsmDir Condition="'$(GameAsmDir)' == ''">$(MSBuildThisFileDirectory)..\..\repo-ios-private\Plugins</GameAsmDir>
-    <!-- publicized Assembly-CSharp for compiling only -->
-    <RefAsmDir Condition="'$(RefAsmDir)' == ''">$(MSBuildThisFileDirectory)obj\gameref</RefAsmDir>
     <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
   </PropertyGroup>
   <ItemGroup>
-    <Reference Include="Assembly-CSharp"><HintPath>$(RefAsmDir)\Assembly-CSharp.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Assembly-CSharp"><HintPath>$(GameAsmDir)\Assembly-CSharp.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="RepoShim"><HintPath>$(GameAsmDir)\RepoShim.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="Unity.InputSystem"><HintPath>$(GameAsmDir)\Unity.InputSystem.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="PhotonUnityNetworking"><HintPath>$(GameAsmDir)\PhotonUnityNetworking.dll</HintPath><Private>false</Private></Reference>
@@ -30,6 +28,7 @@
     <Reference Include="UnityEngine.UIModule"><HintPath>$(ManagedDir)\UnityEngine.UIModule.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="UnityEngine.AudioModule"><HintPath>$(ManagedDir)\UnityEngine.AudioModule.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="UnityEngine.PhysicsModule"><HintPath>$(ManagedDir)\UnityEngine.PhysicsModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.ScreenCaptureModule"><HintPath>$(ManagedDir)\UnityEngine.ScreenCaptureModule.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="UnityEngine.ImageConversionModule"><HintPath>$(ManagedDir)\UnityEngine.ImageConversionModule.dll</HintPath><Private>false</Private></Reference>
   </ItemGroup>
 </Project>

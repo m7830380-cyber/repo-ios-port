@@ -49,7 +49,6 @@ static class Program
         if (args.Length >= 3 && args[0] == "memberrefs") return Analyze.MemberRefs(args[1], args[2]);
         if (args.Length >= 3 && args[0] == "calls") return Analyze.Calls(args[1], args[2]);
         if (args.Length >= 4 && args[0] == "patch") return Patch(args[1], args[2], args[3]);
-        if (args.Length >= 3 && args[0] == "publicize") return Publicize(args[1], args[2]);
         Console.Error.WriteLine("usage: RepoPatcher patch <managedDir> <RepoShim.dll> <outDir> | analyze <managedDir>");
         return 1;
     }
@@ -88,25 +87,6 @@ static class Program
         File.Copy(shimPath, Path.Combine(outDir, "RepoShim.dll"), true);
         Console.WriteLine($"{shipped.Count} assemblies, total {total} patches, {failures} failures");
         return failures == 0 ? 0 : 2;
-    }
-
-    // Compile-time reference copy with every type/member public, so the iOS mod can read the game's internal
-    // state (IL2CPP, like Mono, does not enforce member access at runtime). Never shipped.
-    static int Publicize(string inPath, string outPath)
-    {
-        var resolver = new DefaultAssemblyResolver();
-        resolver.AddSearchDirectory(Path.GetDirectoryName(Path.GetFullPath(inPath)));
-        var asm = AssemblyDefinition.ReadAssembly(inPath, new ReaderParameters { AssemblyResolver = resolver });
-        foreach (var t in asm.MainModule.GetTypes())
-        {
-            if (t.IsNested) t.IsNestedPublic = true; else t.IsPublic = true;
-            foreach (var m in t.Methods) m.IsPublic = true;
-            foreach (var f in t.Fields)
-                if (!t.Events.Any(e => e.Name == f.Name)) f.IsPublic = true;
-        }
-        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outPath)));
-        asm.Write(outPath);
-        return 0;
     }
 
     sealed class Ctx
@@ -304,6 +284,14 @@ static class Program
         if (names < 1) c.Fail("Environment.MachineName (player name) not found");
         if (cursors < 2) c.Fail($"expected Cursor setters, found {cursors}");
 
+        // --- Steam: the game already runs without it (name/ID fall back to local values), except that
+        //     RunManager.Update quits the game once a level is generated and SteamClient.IsValid is false.
+        //     Only that check sees "valid"; every other caller keeps the offline path.
+        n += ConstInsteadOfCall(c, "RunManager", "Update", "Steamworks.SteamClient", "get_IsValid", 1, expected: 1);
+
+        // --- game state the iOS mod reads (text entry open)
+        n += MakePublic(c, mod.GetType("MenuManager"), "textInputActive");
+
         // --- Discord: no SDK on iOS. Start() would throw creating the native client, and every later rich
         //     presence update would hit a null activity. Keep Awake (singleton), make the rest no-ops.
         var discord = mod.GetType("DiscordManager");
@@ -316,6 +304,41 @@ static class Program
                 m.Body.GetILProcessor().Emit(OpCodes.Ret);
                 n++;
             }
+        return n;
+    }
+
+    static int MakePublic(Ctx c, TypeDefinition t, params string[] fields)
+    {
+        int n = 0;
+        foreach (var name in fields)
+        {
+            var f = t?.Fields.FirstOrDefault(x => x.Name == name);
+            if (f == null) { c.Fail($"{t?.Name}.{name} missing"); continue; }
+            // Unity serializes public fields: keep the serialized layout identical to the retail one
+            // (otherwise scenes fail with "file is corrupted / Position out of bounds").
+            bool serialized = f.CustomAttributes.Any(a => a.AttributeType.Name == "SerializeField");
+            f.Attributes = (f.Attributes & ~FieldAttributes.FieldAccessMask) | FieldAttributes.Public;
+            if (!serialized) f.Attributes |= FieldAttributes.NotSerialized;
+            n++;
+        }
+        return n;
+    }
+
+    // Replaces every call to a static bool/int getter inside one method with a constant.
+    static int ConstInsteadOfCall(Ctx c, string type, string method, string calleeType, string callee, int value, int expected)
+    {
+        var t = c.Mod.GetType(type);
+        var m = t?.Methods.FirstOrDefault(x => x.Name == method && x.HasBody);
+        if (m == null) { c.Fail($"{type}.{method} missing"); return 0; }
+        int n = 0;
+        foreach (var ins in m.Body.Instructions)
+            if (ins.OpCode == OpCodes.Call && ins.Operand is MethodReference mr && mr.Name == callee && mr.DeclaringType.FullName == calleeType)
+            {
+                ins.OpCode = OpCodes.Ldc_I4;
+                ins.Operand = value;
+                n++;
+            }
+        if (n != expected) c.Fail($"{type}.{method}: expected {expected} x {calleeType}.{callee}, found {n}");
         return n;
     }
 
