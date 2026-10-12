@@ -1,0 +1,209 @@
+name: Build iOS shell IPA
+
+# Builds the IL2CPP player (Unity 2022.3.67f2, the game's exact version) that contains the patched game
+# assemblies from the private repo (m7830380-cyber/repo-ios-private). Game data is injected afterwards on
+# the PC by tools/package_ipa.py. Because the result contains compiled game code, the IPA is published
+# as a release of the PRIVATE repo, never as an artifact or release of this public one.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'shell/**'
+      - 'ci/**'
+      - '.github/workflows/build-shell.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  UNITY_VERSION: 2022.3.67f2
+  UNITY_REVISION: 6bedba8691df
+  PRIVATE_REPO: m7830380-cyber/repo-ios-private
+
+jobs:
+  shell:
+    runs-on: macos-14
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get patched game assemblies (private repo)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.PRIVATE_REPO }}
+          token: ${{ secrets.PRIVATE_REPO_TOKEN }}
+          path: private
+
+      - name: Place plugins
+        run: |
+          set -euo pipefail
+          mkdir -p shell/Assets/Plugins
+          rm -rf shell/Assets/Plugins/Game
+          cp -R private/Plugins shell/Assets/Plugins/Game
+          ls shell/Assets/Plugins/Game | grep -c '\.dll$'
+
+      - name: Select Xcode
+        run: |
+          ls -d /Applications/Xcode_*.app
+          X=$(ls -d /Applications/Xcode_16*.app 2>/dev/null | sort -V | tail -n 1)
+          [ -n "$X" ] || X=$(ls -d /Applications/Xcode_15*.app | sort -V | tail -n 1)
+          sudo xcode-select -s "$X"
+          xcodebuild -version
+
+      # 2022.3.67f2 is an Extended LTS release (not listed by the Unity Hub API), so install the Apple-silicon
+      # editor + iOS module straight from Unity's download server. Cached between runs (only Unity itself).
+      - name: Restore Unity install
+        id: unity-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: /Applications/Unity
+          key: unity-${{ env.UNITY_VERSION }}-ios-arm64-v1
+
+      - name: Install Unity ${{ env.UNITY_VERSION }}
+        if: steps.unity-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          BASE=https://download.unity3d.com/download_unity/$UNITY_REVISION
+          curl -fsSL --retry 3 -o /tmp/editor.pkg "$BASE/MacEditorInstallerArm64/Unity-$UNITY_VERSION.pkg" &
+          curl -fsSL --retry 3 -o /tmp/ios.pkg "$BASE/MacEditorTargetInstaller/UnitySetup-iOS-Support-for-Editor-$UNITY_VERSION.pkg" &
+          wait
+          ls -l /tmp/*.pkg
+          sudo installer -pkg /tmp/editor.pkg -target /
+          rm -f /tmp/editor.pkg
+          sudo installer -pkg /tmp/ios.pkg -target /
+          rm -f /tmp/ios.pkg
+          sudo chown -R "$(whoami)" /Applications/Unity
+
+      - name: Save Unity install
+        if: steps.unity-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: /Applications/Unity
+          key: unity-${{ env.UNITY_VERSION }}-ios-arm64-v1
+
+      - name: Check Unity
+        run: |
+          ls /Applications/Unity/PlaybackEngines
+          file /Applications/Unity/Unity.app/Contents/MacOS/Unity
+
+      # The .ulf is bound to the machine it was made on, so activate this runner with the serial inside it
+      # (what game-ci does on macOS) and return the seat afterwards.
+      - name: Activate Unity
+        timeout-minutes: 12
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+        run: |
+          set +e
+          SERIAL=$(printf '%s' "$UNITY_LICENSE" | python3 -c "import sys,re,base64; d=re.search(r'<DeveloperData Value=\"([^\"]+)\"',sys.stdin.read()).group(1); print(base64.b64decode(d)[4:].decode())")
+          [ -n "$SERIAL" ] || { echo "could not read the serial from UNITY_LICENSE"; exit 1; }
+          echo "::add-mask::$SERIAL"
+          mkdir -p /tmp/activate-project
+          # Unity otherwise asks for an admin password (GUI dialog) to create these and waits forever
+          for d in "/Library/Application Support/Unity" "/Library/Application Support/Unity/licenses" "$HOME/Library/Unity/licenses"; do
+            sudo mkdir -p "$d"; sudo chown -R "$(whoami)" "$d"; sudo chmod -R 775 "$d"
+          done
+          sudo chown -R "$(whoami)" "$HOME/Library/Unity" "/Library/Application Support/Unity"
+          mkdir -p "$HOME/Library/Unity/cache"
+          OK="License activated successfully|license is already valid and activated|Successfully activated"
+          for attempt in 1 2; do
+            ci/unity.sh /tmp/activate.log 300 "$OK" -quit -serial "$SERIAL" -username "$UNITY_EMAIL" -password "$UNITY_PASSWORD" -projectPath /tmp/activate-project
+            rc=$?
+            echo "attempt $attempt: exit code $rc"
+            [ $rc = 0 ] && break
+            tail -n 60 /tmp/activate.log
+          done
+          for f in ~/Library/Logs/Unity/Unity.Licensing.Client.log ~/Library/Logs/Unity/Unity.Entitlements.Audit.log; do
+            [ -f "$f" ] && { echo "== $f"; tail -n 30 "$f"; }
+          done
+          exit $rc
+
+      - name: Unity build (Xcode project)
+        timeout-minutes: 100
+        env:
+          SHELL_OUT: ${{ github.workspace }}/xcode
+          SHELL_DEBUG_OUT: ${{ github.workspace }}/staged-managed
+        run: |
+          set +e
+          ci/unity.sh "$PWD/unity.log" 5800 "" -quit -projectPath "$PWD/shell" -buildTarget iOS -executeMethod IosShellBuild.Build
+          rc=$?
+          echo "---- error lines"; grep -n -i -E "error|exception|failed|cannot|could not" unity.log | head -n 80
+          echo "---- last lines"; tail -n 120 unity.log
+          [ -f shell/Logs/upm.log ] && { echo "---- upm.log"; tail -n 60 shell/Logs/upm.log; }
+          [ -f xcode/Unity-iPhone.xcodeproj/project.pbxproj ] || { echo "no Xcode project produced"; exit 1; }
+          exit $rc
+
+      - name: Return Unity license
+        if: always()
+        timeout-minutes: 4
+        env:
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+        run: |
+          [ -x /Applications/Unity/Unity.app/Contents/MacOS/Unity ] || exit 0
+          ci/unity.sh /tmp/return.log 150 "" -quit -returnlicense -username "$UNITY_EMAIL" -password "$UNITY_PASSWORD" || true
+
+      # Linked assemblies of a failed IL2CPP run go to the PRIVATE repo only (they contain game code).
+      - name: Upload staged assemblies for debugging (private repo)
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+        run: |
+          [ -d staged-managed ] || { echo "nothing staged"; exit 0; }
+          zip -qrj staged-managed.zip staged-managed
+          gh release view debug-staged --repo "$PRIVATE_REPO" >/dev/null 2>&1 || \
+            gh release create debug-staged --title "debug: staged assemblies" --notes "from failed shell builds" --prerelease --repo "$PRIVATE_REPO"
+          gh release upload debug-staged staged-managed.zip --clobber --repo "$PRIVATE_REPO"
+
+      - name: Xcode build (unsigned)
+        run: |
+          set -euo pipefail
+          cd xcode
+          set +e
+          xcodebuild -project Unity-iPhone.xcodeproj -scheme Unity-iPhone -configuration Release \
+            -sdk iphoneos -derivedDataPath "$PWD/dd" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" DEVELOPMENT_TEAM="" \
+            ENABLE_BITCODE=NO build > xcodebuild.log 2>&1
+          rc=$?
+          set -e
+          grep -E "error:|\*\* BUILD" xcodebuild.log | head -n 80 || true
+          tail -n 40 xcodebuild.log
+          exit $rc
+
+      # TrollStore keeps the entitlements of an ldid fakesign: the increased memory limit matters (the game
+      # data is ~1 GB of textures).
+      - name: Fakesign (ldid + entitlements)
+        run: |
+          set -euo pipefail
+          brew install ldid >/dev/null
+          APP="$(find xcode/dd -name '*.app' -path '*Release-iphoneos*' | head -n 1)"
+          FW="$APP/Frameworks/UnityFramework.framework"
+          [ -d "$FW" ] && ldid -S "$FW/UnityFramework"
+          ldid -S"shell/ent.plist" "$APP/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist")"
+          ldid -e "$APP/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist")"
+
+      - name: Package shell IPA
+        run: |
+          set -euo pipefail
+          APP="$(find xcode/dd -name '*.app' -path '*Release-iphoneos*' | head -n 1)"
+          echo "app: $APP"
+          rm -rf Payload && mkdir Payload && cp -R "$APP" Payload/
+          zip -qry REPO-shell.ipa Payload
+          ls -lh REPO-shell.ipa
+
+      - name: Publish release (private repo)
+        env:
+          GH_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG=shell-latest
+          NOTES="Shell IPA (no game data) from public run ${{ github.run_number }} / ${{ github.sha }}, plugins $(git -C private rev-parse --short HEAD)"
+          if gh release view "$TAG" --repo "$PRIVATE_REPO" >/dev/null 2>&1; then
+            gh release upload "$TAG" REPO-shell.ipa --clobber --repo "$PRIVATE_REPO"
+            gh release edit "$TAG" --notes "$NOTES" --repo "$PRIVATE_REPO"
+          else
+            gh release create "$TAG" REPO-shell.ipa --title "iOS shell (no game data)" --notes "$NOTES" --prerelease --repo "$PRIVATE_REPO"
+          fi
