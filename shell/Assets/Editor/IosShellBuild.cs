@@ -142,6 +142,42 @@ public static class IosShellBuild
         gcProfiles.AddDict().SetString("ProfileName", "ExtendedGamepad");
         plist.WriteToFile(plistPath);
 
+        // Unity's native console output (and NSLog) -> Documents/REPO-iOS-native.log (previous run: -prev), so a
+        // failure before any managed code runs (data loading, IL2CPP init) still leaves a log on the device.
+        string mainPath = Path.Combine(path, "MainApp", "main.mm");
+        if (!File.Exists(mainPath)) mainPath = Path.Combine(path, "Classes", "main.mm");
+        string main = File.ReadAllText(mainPath);
+        const string hook = "static void RepoRedirectNativeLog()";
+        if (!main.Contains(hook))
+        {
+            string fn = hook + @"
+{
+    NSString* docs = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
+    if (docs == nil) return;
+    NSString* cur = [docs stringByAppendingPathComponent: @""REPO-iOS-native.log""];
+    NSString* prev = [docs stringByAppendingPathComponent: @""REPO-iOS-native-prev.log""];
+    NSFileManager* fm = [NSFileManager defaultManager];
+    [fm removeItemAtPath: prev error: nil];
+    [fm moveItemAtPath: cur toPath: prev error: nil];
+    if (freopen([cur fileSystemRepresentation], ""w"", stderr) != NULL)
+    {
+        setvbuf(stderr, NULL, _IONBF, 0);
+        dup2(fileno(stderr), fileno(stdout));
+        setvbuf(stdout, NULL, _IOLBF, 0);
+    }
+}
+
+";
+            int at = main.IndexOf("int main(", StringComparison.Ordinal);
+            if (at < 0) throw new Exception("main() not found in " + mainPath);
+            main = main.Insert(at, fn);
+            int brace = main.IndexOf('{', main.IndexOf("int main(", StringComparison.Ordinal));
+            main = main.Insert(brace + 1, "\n    RepoRedirectNativeLog();");
+            if (!main.Contains("#include <stdio.h>")) main = "#include <stdio.h>\n#include <unistd.h>\n" + main;
+            File.WriteAllText(mainPath, main);
+            Debug.Log("[IosShellBuild] native log redirect added to " + mainPath);
+        }
+
         // Unsigned build (TrollStore install; CI fakesigns with ldid + entitlements afterwards).
         string projPath = PBXProject.GetPBXProjectPath(path);
         var proj = new PBXProject();
