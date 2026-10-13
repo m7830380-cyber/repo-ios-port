@@ -289,6 +289,10 @@ static class Program
         //     Only that check sees "valid"; every other caller keeps the offline path.
         n += ConstInsteadOfCall(c, "RunManager", "Update", "Steamworks.SteamClient", "get_IsValid", 1, expected: 1);
 
+        // --- multiplayer (Steam lobbies + Photon) is not available: the main menu's Host / Join / Play Random
+        //     buttons show a popup instead.
+        n += MultiplayerPopups(c);
+
         // --- game state the iOS mod reads (text entry open)
         n += MakePublic(c, mod.GetType("MenuManager"), "textInputActive");
 
@@ -304,6 +308,37 @@ static class Program
                 m.Body.GetILProcessor().Emit(OpCodes.Ret);
                 n++;
             }
+        return n;
+    }
+
+    static int MultiplayerPopups(Ctx c)
+    {
+        var mod = c.Mod;
+        var page = mod.GetType("MenuPageMain");
+        var mm = mod.GetType("MenuManager");
+        var inst = mm?.Fields.FirstOrDefault(f => f.Name == "instance");
+        var popup = mm?.Methods.FirstOrDefault(m => m.Name == "PagePopUp" && m.Parameters.Count == 5);
+        if (page == null || inst == null || popup == null) { c.Fail("MenuPageMain / MenuManager.PagePopUp missing"); return 0; }
+        var core = mod.AssemblyReferences.First(r => r.Name == "UnityEngine.CoreModule");
+        var color = new TypeReference("UnityEngine", "Color", mod, core) { IsValueType = true };
+        var red = new MethodReference("get_red", color, color);
+        int n = 0;
+        foreach (var name in new[] { "ButtonEventHostGame", "ButtonEventJoinGame", "ButtonEventPlayRandom" })
+        {
+            var m = page.Methods.FirstOrDefault(x => x.Name == name && x.Parameters.Count == 0);
+            if (m == null) { c.Fail("MenuPageMain." + name + " missing"); continue; }
+            m.Body = new MethodBody(m);
+            var il = m.Body.GetILProcessor();
+            il.Emit(OpCodes.Ldsfld, inst);
+            il.Emit(OpCodes.Ldstr, "MULTIPLAYER");
+            il.Emit(OpCodes.Call, red);
+            il.Emit(OpCodes.Ldstr, "Online play needs Steam lobbies, so it is not available in the iOS version.\n\nPlay <b>SINGLEPLAYER</b> instead.");
+            il.Emit(OpCodes.Ldstr, "OK");
+            il.Emit(OpCodes.Ldc_I4_1);
+            il.Emit(OpCodes.Callvirt, popup);
+            il.Emit(OpCodes.Ret);
+            n++;
+        }
         return n;
     }
 

@@ -38,6 +38,12 @@ namespace RepoIOS
             yield return WaitFor("main menu", () => FindObjectOfType<MenuPageMain>() != null, 60);
             yield return new WaitForSeconds(3);
             Shot("menu");
+            Log.Info("AUTOTEST: host game button (expect 'not available' popup)");
+            FindObjectOfType<MenuPageMain>().ButtonEventHostGame();
+            yield return new WaitForSeconds(1.5f);
+            Shot("menu-host-popup");
+            MenuManager.instance.PageCloseAll();
+            yield return new WaitForSeconds(1f);
             Log.Info("AUTOTEST: new singleplayer game");
             SemiFunc.MainMenuSetSingleplayer();
             SemiFunc.MenuActionSingleplayerGame();
