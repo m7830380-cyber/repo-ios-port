@@ -1,9 +1,13 @@
 name: Build iOS shell IPA
 
-# Builds the IL2CPP player (Unity 2022.3.67f2, the game's exact version) that contains the patched game
+# Builds the IL2CPP player that contains the patched game
 # assemblies from the private repo (m7830380-cyber/repo-ios-private). Game data is injected afterwards on
 # the PC by tools/package_ipa.py. Because the result contains compiled game code, the IPA is published
 # as a release of the PRIVATE repo, never as an artifact or release of this public one.
+#
+# Unity version: the game is 2022.3.67f2, an Extended LTS release that only runs with an Enterprise/Industry
+# license. 2022.3.62f3 is the last public release of the same LTS line; the data converter stamps the
+# game's data files with this version.
 
 on:
   push:
@@ -18,8 +22,8 @@ permissions:
   contents: read
 
 env:
-  UNITY_VERSION: 2022.3.67f2
-  UNITY_REVISION: 6bedba8691df
+  UNITY_VERSION: 2022.3.62f3
+  UNITY_REVISION: 96770f904ca7
   PRIVATE_REPO: m7830380-cyber/repo-ios-private
 
 jobs:
@@ -52,8 +56,8 @@ jobs:
           sudo xcode-select -s "$X"
           xcodebuild -version
 
-      # 2022.3.67f2 is an Extended LTS release (not listed by the Unity Hub API), so install the Apple-silicon
-      # editor + iOS module straight from Unity's download server. Cached between runs (only Unity itself).
+      # Apple-silicon editor + iOS module straight from Unity's download server (no Hub needed).
+      # Cached between runs (only Unity itself).
       - name: Restore Unity install
         id: unity-cache
         uses: actions/cache/restore@v4

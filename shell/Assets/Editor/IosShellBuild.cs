@@ -9,7 +9,8 @@ using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.Rendering;
 
-// Builds the iOS player "shell" with Unity 2022.3.67f2 (the game's exact version): an IL2CPP player that
+// Builds the iOS player "shell" with Unity 2022.3.62f3 (the game is 2022.3.67f2, an Enterprise-only Extended
+// LTS release; .62f3 is the last public build of the same LTS line): an IL2CPP player that
 // contains the patched retail R.E.P.O. assemblies (Assets/Plugins/Game, from the private repo) plus the iOS
 // mod. The game's own data files are swapped into the .app afterwards by tools/package_ipa.py.
 public static class IosShellBuild
