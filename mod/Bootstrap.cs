@@ -18,7 +18,7 @@ namespace RepoIOS
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
         static void EarlyInit()
         {
-            Documents = Application.persistentDataPath;
+            Documents = Platform.DocumentsDir;
             Log.Init(Documents);
             Log.Info($"R.E.P.O. iOS starting. documents={Documents}");
             Log.Info($"device={SystemInfo.deviceModel} os={SystemInfo.operatingSystem} gpu={SystemInfo.graphicsDeviceName} " +
@@ -35,6 +35,8 @@ namespace RepoIOS
             try
             {
                 TouchEnabled = OnDevice || File.Exists(Path.Combine(Documents, "touchsim"));
+                if (!OnDevice && Array.IndexOf(Environment.GetCommandLineArgs(), "-repo-docs") >= 0)
+                    Application.runInBackground = true;   // several copies on one PC (multiplayer tests)
                 Input.simulateMouseWithTouches = false;
                 Input.multiTouchEnabled = true;
                 Screen.sleepTimeout = SleepTimeout.NeverSleep;
@@ -50,6 +52,7 @@ namespace RepoIOS
                     go.AddComponent<TouchHud>();
                 }
                 go.AddComponent<Lifecycle>();
+                Lan.LanSession.Init(go);
                 if (TouchEnabled) Autotest.StartIfRequested(go);
                 Log.Info($"touch controls={TouchEnabled} targetFrameRate={Application.targetFrameRate}");
 

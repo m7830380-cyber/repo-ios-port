@@ -21,6 +21,33 @@ namespace RepoShim
             return null;
         }
 
+        // ---- Documents (log, player name/ID, test flags); "-repo-docs <dir>" overrides it (two copies on one PC)
+        static string s_Docs;
+
+        public static string DocumentsDir
+        {
+            get
+            {
+                if (s_Docs != null) return s_Docs;
+                s_Docs = Application.persistentDataPath;
+                try
+                {
+                    var a = Environment.GetCommandLineArgs();
+                    int i = Array.IndexOf(a, "-repo-docs");
+                    if (i >= 0 && i + 1 < a.Length)
+                    {
+                        Directory.CreateDirectory(a[i + 1]);
+                        s_Docs = a[i + 1];
+                    }
+                }
+                catch (Exception e)
+                {
+                    Debug.LogWarning("[REPO-iOS] -repo-docs: " + e.Message);
+                }
+                return s_Docs;
+            }
+        }
+
         // ---- player identity (the game falls back to Environment.MachineName without Steam) -----
         static string playerName;
 
@@ -33,7 +60,7 @@ namespace RepoShim
                 playerName = "Player";
                 try
                 {
-                    string p = Path.Combine(Application.persistentDataPath, "PlayerName.txt");
+                    string p = Path.Combine(DocumentsDir, "PlayerName.txt");
                     if (File.Exists(p))
                     {
                         string n = File.ReadAllText(p).Trim();
@@ -51,6 +78,23 @@ namespace RepoShim
                     Debug.LogWarning("[REPO-iOS] player name: " + e.Message);
                 }
                 return playerName;
+            }
+        }
+
+        /// Changes the player name (and Documents/PlayerName.txt).
+        public static void SetPlayerName(string name)
+        {
+            name = (name ?? "").Trim();
+            if (name.Length == 0) return;
+            if (name.Length > 32) name = name.Substring(0, 32);
+            playerName = name;
+            try
+            {
+                File.WriteAllText(Path.Combine(DocumentsDir, "PlayerName.txt"), name + "\n");
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning("[REPO-iOS] player name: " + e.Message);
             }
         }
 

@@ -353,6 +353,7 @@ namespace RepoIOS
         void Begin(int id, Vector2 pos)
         {
             if (DebugOverlay.HandleTouch(pos)) return;
+            if (Lan.LanMenu.HandleTouch(pos)) return;
             if (m_SettingsOpen && SettingsTouch(pos)) return;
             var hit = HitButton(pos);
             if (hit != null)
@@ -423,6 +424,7 @@ namespace RepoIOS
                 if (t.phase == UnityEngine.TouchPhase.Began)
                 {
                     if (DebugOverlay.HandleTouch(t.position)) continue;
+                    if (Lan.LanMenu.HandleTouch(t.position)) continue;
                     if (m_PointerFinger < 0)
                     {
                         m_PointerFinger = t.fingerId;

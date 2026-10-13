@@ -136,6 +136,8 @@ public static class IosShellBuild
         root.SetBoolean("UIRequiresFullScreen", true);
         root.SetBoolean("UIStatusBarHidden", true);
         root.SetBoolean("ITSAppUsesNonExemptEncryption", false);
+        // local Wi-Fi multiplayer: the host runs a game server, joining phones find it by UDP broadcast
+        root.SetString("NSLocalNetworkUsageDescription", "R.E.P.O. uses your Wi-Fi to play with friends on the same network.");
         if (root.values.ContainsKey("NSMicrophoneUsageDescription"))
             root.values.Remove("NSMicrophoneUsageDescription");      // voice chat is disabled on iOS
         var gcProfiles = root.CreateArray("GCSupportedGameControllers");

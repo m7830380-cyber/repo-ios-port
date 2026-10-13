@@ -1,6 +1,7 @@
 # R.E.P.O. iOS port (TrollStore)
 
-Runs the retail Steam build of R.E.P.O. (Unity 2022.3.67f2) natively on iPhone, singleplayer and offline.
+Runs the retail Steam build of R.E.P.O. (Unity 2022.3.67f2) natively on iPhone: singleplayer offline, and
+multiplayer with other phones on the same Wi-Fi.
 It does not rebuild the game: the game's own assemblies are patched and AOT-compiled into an IL2CPP player
 built with the game's exact Unity version, and the game's own data files are converted for Metal and
 dropped in.
@@ -15,6 +16,10 @@ the private repo `repo-ios-private` (patched `Plugins/` + IPA releases).
 * `shim/` – `RepoShim.dll`: virtual legacy input + platform stand-ins the patched game calls.
 * `mod/` – `RepoIOS.dll`: touch controls (virtual Input System keyboard/mouse/gamepad), controller support,
   log file + log viewer.
+* `mod/Lan` – local multiplayer: HOST GAME starts a small Photon-compatible server (TCP, GpBinaryV18,
+  the LoadBalancing subset PUN uses, event data forwarded byte-for-byte) inside the host's app and announces
+  it by UDP broadcast; JOIN GAME lists those games (or joins by IP). The game itself runs its own Steam-less
+  `localTest` multiplayer path against it. PC test: `python tools/pctest.py lan` (two windows, host + join).
 * `shell/` – minimal Unity 2022.3.67f2 project; CI builds the unsigned, ldid-fakesigned shell IPA from it.
 * `tools/build_plugins.py` – builds shim + mod and runs the patcher into `../repo-ios-private/Plugins`.
 * `tools/convert_data.py`, `convert_shader.py`, `dx2metal.py`, `transcode_tex.py` – convert the Windows data

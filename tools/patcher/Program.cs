@@ -17,8 +17,12 @@
 //  * vSyncCount / targetFrameRate go through RepoShim.Platform (iOS needs an explicit frame rate).
 //  * Screen.SetResolution is ignored (the game re-applies the desktop resolution).
 //  * DiscordManager does nothing (no Discord SDK on iOS).
+//  * Host / Join / Play Random call RepoShim.Lan (local Wi-Fi multiplayer, see mod/Lan); the game's Steam-less
+//    localTest multiplayer path is used with Photon pointed at the host device.
 // Unity.Postprocessing.Runtime:
 //  * compute shaders are reported unsupported (auto exposure, MSVO and the 3D LUT baker are compute-only).
+// PhotonVoice:
+//  * the voice recorder does not retry the (missing) microphone every 3 s.
 using Mono.Cecil;
 using Mono.Cecil.Cil;
 
@@ -78,6 +82,8 @@ static class Program
                 n += PatchGame(ctx);
             if (asm.Name.Name == "Unity.Postprocessing.Runtime")
                 n += NoComputeShaders(ctx);
+            if (asm.Name.Name == "PhotonVoice")
+                n += NoMicRefresh(ctx);
             total += n;
             failures += ctx.Failures;
             asm.Write(Path.Combine(outDir, name));
@@ -289,9 +295,10 @@ static class Program
         //     Only that check sees "valid"; every other caller keeps the offline path.
         n += ConstInsteadOfCall(c, "RunManager", "Update", "Steamworks.SteamClient", "get_IsValid", 1, expected: 1);
 
-        // --- multiplayer (Steam lobbies + Photon) is not available: the main menu's Host / Join / Play Random
-        //     buttons show a popup instead.
-        n += MultiplayerPopups(c);
+        // --- multiplayer: Steam lobbies are not available, so the main menu's Host / Join / Play Random buttons
+        //     go to the mod (local Wi-Fi games through a Photon server built into the host's app).
+        n += MultiplayerButtons(c);
+        n += LanMultiplayer(c);
 
         // --- game state the iOS mod reads (text entry open)
         n += MakePublic(c, mod.GetType("MenuManager"), "textInputActive");
@@ -311,32 +318,187 @@ static class Program
         return n;
     }
 
-    static int MultiplayerPopups(Ctx c)
+    static int MultiplayerButtons(Ctx c)
     {
-        var mod = c.Mod;
-        var page = mod.GetType("MenuPageMain");
-        var mm = mod.GetType("MenuManager");
-        var inst = mm?.Fields.FirstOrDefault(f => f.Name == "instance");
-        var popup = mm?.Methods.FirstOrDefault(m => m.Name == "PagePopUp" && m.Parameters.Count == 5);
-        if (page == null || inst == null || popup == null) { c.Fail("MenuPageMain / MenuManager.PagePopUp missing"); return 0; }
-        var core = mod.AssemblyReferences.First(r => r.Name == "UnityEngine.CoreModule");
-        var color = new TypeReference("UnityEngine", "Color", mod, core) { IsValueType = true };
-        var red = new MethodReference("get_red", color, color);
-        int n = 0;
+        var page = c.Mod.GetType("MenuPageMain");
+        if (page == null) { c.Fail("MenuPageMain missing"); return 0; }
+        var hook = c.ShimMethod("Lan", "OnMenuButton", "System.Int32");
+        int n = 0, which = 0;
         foreach (var name in new[] { "ButtonEventHostGame", "ButtonEventJoinGame", "ButtonEventPlayRandom" })
         {
             var m = page.Methods.FirstOrDefault(x => x.Name == name && x.Parameters.Count == 0);
-            if (m == null) { c.Fail("MenuPageMain." + name + " missing"); continue; }
+            if (m == null) { c.Fail("MenuPageMain." + name + " missing"); which++; continue; }
             m.Body = new MethodBody(m);
             var il = m.Body.GetILProcessor();
-            il.Emit(OpCodes.Ldsfld, inst);
-            il.Emit(OpCodes.Ldstr, "MULTIPLAYER");
-            il.Emit(OpCodes.Call, red);
-            il.Emit(OpCodes.Ldstr, "Online play needs Steam lobbies, so it is not available in the iOS version.\n\nPlay <b>SINGLEPLAYER</b> instead.");
-            il.Emit(OpCodes.Ldstr, "OK");
-            il.Emit(OpCodes.Ldc_I4_1);
-            il.Emit(OpCodes.Callvirt, popup);
+            il.Emit(OpCodes.Ldc_I4, which++);
+            il.Emit(OpCodes.Call, hook);
             il.Emit(OpCodes.Ret);
+            n++;
+        }
+        return n;
+    }
+
+    // Local multiplayer uses the game's own Steam-less multiplayer path (GameManager.localTest, which the
+    // developers use for local testing) with Photon pointed at the host device.
+    static int LanMultiplayer(Ctx c)
+    {
+        var mod = c.Mod;
+        int n = 0;
+        var gm = mod.GetType("GameManager");
+        var gmInstance = gm?.Fields.FirstOrDefault(f => f.Name == "instance");
+        var localTest = gm?.Fields.FirstOrDefault(f => f.Name == "localTest");
+        if (gmInstance == null || localTest == null) { c.Fail("GameManager.instance / localTest missing"); return 0; }
+
+        // 1. DataDirector.PhotonSetAppId() -> afterwards the mod applies the LAN server address
+        var setAppId = mod.GetType("DataDirector")?.Methods.FirstOrDefault(x => x.Name == "PhotonSetAppId" && x.HasBody);
+        if (setAppId == null) c.Fail("DataDirector.PhotonSetAppId missing");
+        else n += BeforeEachRet(setAppId, il => new[] { il.Create(OpCodes.Call, c.ShimMethod("Lan", "OnPhotonSetAppId")) });
+
+        // 2. SemiFunc.MenuActionHostGame() clears localTest (Steam lobby path); LAN hosting keeps it set
+        var hostGame = mod.GetType("SemiFunc")?.Methods.FirstOrDefault(x => x.Name == "MenuActionHostGame" && x.HasBody);
+        if (hostGame == null) c.Fail("SemiFunc.MenuActionHostGame missing");
+        else
+        {
+            var get = c.Mod.ImportReference(c.ShimType("Lan").Methods.First(x => x.Name == "get_HostLocalTest"));
+            n += BeforeEachRet(hostGame, il => new[]
+            {
+                il.Create(OpCodes.Ldsfld, gmInstance),
+                il.Create(OpCodes.Call, get),
+                il.Create(OpCodes.Stfld, localTest),
+            });
+        }
+
+        // 3. NetworkConnect.CreateLobby() resets the run progress in localTest mode (debug sessions start fresh);
+        //    the LAN host has just loaded its save, so that reset is dropped (joiners reset before connecting).
+        var nc = mod.GetType("NetworkConnect");
+        var sm = nc?.NestedTypes.FirstOrDefault(t => t.Name.StartsWith("<CreateLobby>"));
+        var moveNext = sm?.Methods.FirstOrDefault(x => x.Name == "MoveNext");
+        if (moveNext == null) c.Fail("NetworkConnect.CreateLobby state machine missing");
+        else
+        {
+            int k = 0;
+            foreach (var ins in moveNext.Body.Instructions)
+                if ((ins.OpCode == OpCodes.Callvirt || ins.OpCode == OpCodes.Call) && ins.Operand is MethodReference mr &&
+                    mr.Name == "ResetProgress" && mr.DeclaringType.Name == "RunManager")
+                {
+                    ins.OpCode = OpCodes.Pop;
+                    ins.Operand = null;
+                    k++;
+                }
+            if (k != 1) c.Fail($"NetworkConnect.CreateLobby: expected 1 ResetProgress call, found {k}");
+            n += k;
+        }
+
+        // 4. state the mod's join flow sets (the same steps as the game's Steam invite join)
+        n += MakePublic(c, mod.GetType("RunManager"), "waitToChangeScene", "lobbyJoin");
+        n += MakePublic(c, mod.GetType("SteamManager"), "joinLobby");
+        n += MakePublic(c, mod.GetType("StatsManager"), "saveFileCurrent");
+
+        // 5. Steam lobby bookkeeping the multiplayer flow calls without checking for Steam (START locks the lobby,
+        //    leaving updates the friends grouping, ...): skipped without Steam. INVITE shows the host's address.
+        var steam = mod.GetType("SteamManager");
+        MethodReference isValid = null;
+        foreach (var (m, ins) in Calls(mod))
+            if (ins.Operand is MethodReference mr && mr.Name == "get_IsValid" && mr.DeclaringType.FullName == "Steamworks.SteamClient") { isValid = mr; break; }
+        if (steam == null || isValid == null) c.Fail("SteamManager / SteamClient.IsValid missing");
+        else
+        {
+            foreach (var name in new[] { "UnlockLobby", "LockLobby", "UpdateSteamFriendGrouping", "SetPlayedWith", "OpenProfile",
+                                         "SetLobbyData", "HostLobby", "JoinLobby", "OpenSteamOverlayToJoin" })
+            {
+                var m = steam.Methods.FirstOrDefault(x => x.Name == name && x.HasBody);
+                if (m == null || m.ReturnType.FullName != "System.Void") { c.Fail("SteamManager." + name + " missing"); continue; }
+                var il = m.Body.GetILProcessor();
+                var first = m.Body.Instructions[0];
+                il.InsertBefore(first, il.Create(OpCodes.Call, isValid));
+                il.InsertBefore(first, il.Create(OpCodes.Brtrue, first));
+                il.InsertBefore(first, il.Create(OpCodes.Ret));
+                n++;
+            }
+            var invite = steam.Methods.FirstOrDefault(x => x.Name == "OpenSteamOverlayToInvite" && x.HasBody);
+            if (invite == null) c.Fail("SteamManager.OpenSteamOverlayToInvite missing");
+            else
+            {
+                invite.Body = new MethodBody(invite);
+                var il = invite.Body.GetILProcessor();
+                il.Emit(OpCodes.Call, c.ShimMethod("Lan", "OnInvite"));
+                il.Emit(OpCodes.Ret);
+                n++;
+            }
+        }
+
+        // 6. PlayerVoiceChat re-selects the (missing) microphone every frame, which restarts the voice recorder and
+        //    logs three errors every 3 s in multiplayer. There is no microphone on iOS: skip the device changes.
+        var voice = mod.GetType("PlayerVoiceChat");
+        int mics = 0;
+        if (voice != null)
+            foreach (var m in voice.Methods.Where(x => x.HasBody))
+                foreach (var ins in m.Body.Instructions.ToList())
+                    if ((ins.OpCode == OpCodes.Callvirt || ins.OpCode == OpCodes.Call) && ins.Operand is MethodReference mr &&
+                        mr.Name == "set_MicrophoneDevice")
+                    {
+                        var il = m.Body.GetILProcessor();
+                        ins.OpCode = OpCodes.Pop;
+                        ins.Operand = null;
+                        il.InsertAfter(ins, il.Create(OpCodes.Pop));
+                        mics++;
+                    }
+        if (mics != 2) c.Fail($"PlayerVoiceChat: expected 2 MicrophoneDevice setters, found {mics}");
+        n += mics;
+
+        // 7. PlayerAvatar.AddToStatsManager(): the player ID is the Steam ID, or "0" without Steam (localTest
+        //    appends the player-list index to name and ID). Every device gets its own stable ID instead, so
+        //    upgrades bought in a friend's save stay with that player.
+        var add = mod.GetType("PlayerAvatar")?.Methods.FirstOrDefault(x => x.Name == "AddToStatsManager" && x.HasBody);
+        if (add == null) c.Fail("PlayerAvatar.AddToStatsManager missing");
+        else
+        {
+            var il = add.Body.GetILProcessor();
+            int zeros = 0, tests = 0;
+            foreach (var ins in add.Body.Instructions.ToList())
+            {
+                if (ins.OpCode == OpCodes.Ldstr && (string)ins.Operand == "0")
+                {
+                    ins.OpCode = OpCodes.Call;
+                    ins.Operand = c.Mod.ImportReference(c.ShimType("Lan").Methods.First(x => x.Name == "get_SteamIdFallback"));
+                    zeros++;
+                }
+                else if (ins.OpCode == OpCodes.Ldfld && ins.Operand is FieldReference fr && fr.Name == "localTest")
+                {
+                    ins.OpCode = OpCodes.Pop;
+                    ins.Operand = null;
+                    il.InsertAfter(ins, il.Create(OpCodes.Ldc_I4_0));
+                    tests++;
+                }
+            }
+            if (zeros != 1 || tests != 1) c.Fail($"PlayerAvatar.AddToStatsManager: expected 1 \"0\" and 1 localTest, found {zeros}/{tests}");
+            n += zeros + tests;
+        }
+        return n;
+    }
+
+    static int BeforeEachRet(MethodDefinition m, Func<ILProcessor, Instruction[]> make)
+    {
+        var il = m.Body.GetILProcessor();
+        int n = 0;
+        foreach (var ret in m.Body.Instructions.Where(i => i.OpCode == OpCodes.Ret).ToList())
+        {
+            var code = make(il);
+            // the new code takes over the ret's position, so branches to the ret run it too
+            il.InsertBefore(ret, il.Create(OpCodes.Nop));
+            var nop = ret.Previous;
+            foreach (var ins in m.Body.Instructions)
+            {
+                if (ins.Operand == ret && ins != nop) ins.Operand = nop;
+                if (ins.Operand is Instruction[] targets)
+                    for (int i = 0; i < targets.Length; i++) if (targets[i] == ret) targets[i] = nop;
+            }
+            foreach (var h in m.Body.ExceptionHandlers)
+            {
+                if (h.TryEnd == ret) h.TryEnd = nop;
+                if (h.HandlerEnd == ret) h.HandlerEnd = nop;
+            }
+            foreach (var ins in code) il.InsertBefore(ret, ins);
             n++;
         }
         return n;
@@ -375,6 +537,18 @@ static class Program
             }
         if (n != expected) c.Fail($"{type}.{method}: expected {expected} x {calleeType}.{callee}, found {n}");
         return n;
+    }
+
+    // Photon Voice's Recorder restarts recording every 3 s while the Unity microphone is not recording, which
+    // without a microphone (iOS port) only logs three errors each time.
+    static int NoMicRefresh(Ctx c)
+    {
+        var rec = c.Mod.GetType("Photon.Voice.Unity.Recorder");
+        var m = rec?.Methods.FirstOrDefault(x => x.Name == "RefreshStoppedRecording" && x.HasBody);
+        if (m == null) { c.Fail("Recorder.RefreshStoppedRecording missing"); return 0; }
+        m.Body = new MethodBody(m);
+        m.Body.GetILProcessor().Emit(OpCodes.Ret);
+        return 1;
     }
 
     // Post-processing compute shaders (auto exposure histogram, 3D LUT baker, MSVO ambient occlusion) are

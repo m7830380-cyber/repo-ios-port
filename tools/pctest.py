@@ -3,6 +3,7 @@ Steam-less boot and the input layer can be tested without a phone round trip.
 
   python tools/pctest.py setup   [--game ...] [--plugins ../repo-ios-private/Plugins] [--out ../repo-work/pctest]
   python tools/pctest.py run     [--touchsim] [--seconds N]
+  python tools/pctest.py lan     [--seconds N]   # two windows: one hosts a local game, the other joins it
   python tools/pctest.py restore            # put the PC game's real saves/settings back
 
 The copy hardlinks every game file (no extra disk space) except the managed assemblies and the two JSON
@@ -79,6 +80,42 @@ def run(a):
     print('log:', log)
 
 
+def lan(a):
+    """Local multiplayer test: two copies with their own Documents (log, player ID, autotest script)."""
+    exe = os.path.join(a.out, 'REPO.exe')
+    procs = []
+    for i, (name, mode) in enumerate((('lan-host', 'lan-host'), ('lan-join', 'lan-join 127.0.0.1'))):
+        docs = os.path.join(WORK, name)
+        shutil.rmtree(docs, ignore_errors=True)
+        os.makedirs(docs)
+        open(os.path.join(docs, 'touchsim'), 'w').close()
+        open(os.path.join(docs, 'autotest'), 'w').write(mode)
+        open(os.path.join(docs, 'PlayerName.txt'), 'w').write(('Hosty' if i == 0 else 'Joiny'))
+        args = [exe, '-screen-fullscreen', '0', '-screen-width', '960', '-screen-height', '540',
+                '-repo-docs', docs, '-lan-verbose', '-logFile', os.path.join(docs, 'player.log')]
+        procs.append(subprocess.Popen(args, cwd=a.out))
+        time.sleep(8)
+    t0 = time.time()
+    try:
+        while time.time() - t0 < (a.seconds or 600):
+            done = 0
+            for name in ('lan-host', 'lan-join'):
+                try:
+                    if 'AUTOTEST DONE' in open(os.path.join(WORK, name, 'REPO-iOS.log'), encoding='utf-8', errors='replace').read():
+                        done += 1
+                except OSError:
+                    pass
+            if done == 2 or any(p.poll() is not None for p in procs):
+                break
+            time.sleep(5)
+    finally:
+        time.sleep(3)
+        for p in procs:
+            p.kill()
+    for name in ('lan-host', 'lan-join'):
+        print('log:', os.path.join(WORK, name, 'REPO-iOS.log'))
+
+
 def restore(a):
     if not os.path.isdir(BACKUP):
         sys.exit('no backup at ' + BACKUP)
@@ -89,14 +126,14 @@ def restore(a):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('cmd', choices=['setup', 'run', 'restore'])
+    ap.add_argument('cmd', choices=['setup', 'run', 'lan', 'restore'])
     ap.add_argument('--game', default=r'C:\Program Files (x86)\Steam\steamapps\common\REPO')
     ap.add_argument('--plugins', default=os.path.join(os.path.dirname(ROOT), 'repo-ios-private', 'Plugins'))
     ap.add_argument('--out', default=os.path.join(WORK, 'pctest'))
     ap.add_argument('--touchsim', action='store_true')
     ap.add_argument('--seconds', type=int, default=0)
     a = ap.parse_args()
-    {'setup': setup, 'run': run, 'restore': restore}[a.cmd](a)
+    {'setup': setup, 'run': run, 'lan': lan, 'restore': restore}[a.cmd](a)
 
 
 if __name__ == '__main__':

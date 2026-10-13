@@ -35,15 +35,96 @@ namespace RepoIOS
 
         IEnumerator Start()
         {
+            string mode = "";
+            try { mode = File.ReadAllText(Path.Combine(Bootstrap.Documents, "autotest")).Trim(); } catch { }
+            if (mode.StartsWith("lan-host")) return LanHost();
+            if (mode.StartsWith("lan-join")) return LanJoin(mode.Substring(8).Trim());
+            return Singleplayer();
+        }
+
+        // ---- local multiplayer: one copy hosts, another (second window on the same PC) joins ------------------
+        IEnumerator LanHost()
+        {
+            yield return WaitFor("main menu", () => FindObjectOfType<MenuPageMain>() != null, 60);
+            yield return new WaitForSeconds(3);
+            Log.Info("AUTOTEST LAN: host game");
+            Lan.LanSession.Host();
+            yield return new WaitForSeconds(1.5f);
+            Shot("host-saves");
+            SemiFunc.MenuActionHostGame();
+            yield return WaitFor("host in room", () => Photon.Pun.PhotonNetwork.InRoom, 60);
+            yield return WaitFor("lobby", () => SemiFunc.RunIsLobbyMenu() && LevelGenerator.Instance != null && LevelGenerator.Instance.Generated, 120);
+            yield return new WaitForSeconds(2);
+            Shot("host-lobby");
+            yield return WaitFor("second player", () => Photon.Pun.PhotonNetwork.CurrentRoom.PlayerCount >= 2, 240);
+            yield return new WaitForSeconds(12);
+            LogPlayers("host lobby");
+            Shot("host-lobby-2p");
+            Log.Info("AUTOTEST LAN: start");
+            FindObjectOfType<MenuPageLobby>().ButtonStart();
+            yield return new WaitForSeconds(3);
+            yield return WaitFor("host level", () => InGameplay() && LevelGenerator.Instance.Generated && !SemiFunc.RunIsLobbyMenu(), 240);
+            yield return Walkabout("host-level");
+            yield return new WaitForSeconds(15);
+            LogPlayers("host level");
+            Shot("host-level-later");
+            Log.Info("AUTOTEST LAN: next level");
+            RunManager.instance.ChangeLevel(_completedLevel: true, _levelFailed: false, RunManager.ChangeLevelType.RunLevel);
+            yield return new WaitForSeconds(3);
+            yield return WaitFor("host level 2", () => InGameplay() && LevelGenerator.Instance.Generated, 240);
+            yield return new WaitForSeconds(10);
+            LogPlayers("host level 2");
+            Shot("host-level2");
+            Log.Info($"AUTOTEST DONE errors={Log.ErrorCount}");
+        }
+
+        IEnumerator LanJoin(string address)
+        {
+            yield return WaitFor("main menu", () => FindObjectOfType<MenuPageMain>() != null, 60);
+            yield return new WaitForSeconds(3);
+            Lan.LanMenu.Open();
+            yield return new WaitForSeconds(4);
+            Shot("join-panel");
+            yield return WaitFor("a game on the network", () => Lan.LanDiscovery.Games.Count > 0, 120);
+            Shot("join-list");
+            var games = Lan.LanDiscovery.Games;
+            if (games.Count > 0) address = games[0].Address + ":" + games[0].Port;
+            Log.Info("AUTOTEST LAN: join " + address);
+            Lan.LanMenu.JoinAddress(address);
+            yield return WaitFor("joiner in room", () => Photon.Pun.PhotonNetwork.InRoom, 60);
+            yield return WaitFor("lobby", () => SemiFunc.RunIsLobbyMenu() && LevelGenerator.Instance != null && LevelGenerator.Instance.Generated, 120);
+            yield return new WaitForSeconds(4);
+            LogPlayers("join lobby");
+            Shot("join-lobby");
+            yield return WaitFor("joiner level", () => InGameplay() && LevelGenerator.Instance.Generated && !SemiFunc.RunIsLobbyMenu(), 300);
+            yield return Walkabout("join-level");
+            LogPlayers("join level");
+            yield return new WaitForSeconds(20);
+            yield return WaitFor("joiner level 2", () => InGameplay() && LevelGenerator.Instance.Generated, 300);
+            yield return new WaitForSeconds(8);
+            LogPlayers("join level 2");
+            Shot("join-level2");
+            Log.Info($"AUTOTEST DONE errors={Log.ErrorCount}");
+        }
+
+        static void LogPlayers(string where)
+        {
+            try
+            {
+                var room = Photon.Pun.PhotonNetwork.CurrentRoom;
+                var sb = new System.Text.StringBuilder($"AUTOTEST {where}: photon players={room?.PlayerCount} master={room?.MasterClientId} me={Photon.Pun.PhotonNetwork.LocalPlayer?.ActorNumber} ping={Photon.Pun.PhotonNetwork.GetPing()}ms servertime={Photon.Pun.PhotonNetwork.ServerTimestamp}; avatars:");
+                foreach (var a in SemiFunc.PlayerGetList())
+                    sb.Append($" [{SemiFunc.PlayerGetName(a)} id={SemiFunc.PlayerGetSteamID(a)} pos={a.transform.position}]");
+                Log.Info(sb.ToString());
+            }
+            catch (Exception e) { Log.Warn("AUTOTEST players: " + e.Message); }
+        }
+
+        IEnumerator Singleplayer()
+        {
             yield return WaitFor("main menu", () => FindObjectOfType<MenuPageMain>() != null, 60);
             yield return new WaitForSeconds(3);
             Shot("menu");
-            Log.Info("AUTOTEST: host game button (expect 'not available' popup)");
-            FindObjectOfType<MenuPageMain>().ButtonEventHostGame();
-            yield return new WaitForSeconds(1.5f);
-            Shot("menu-host-popup");
-            MenuManager.instance.PageCloseAll();
-            yield return new WaitForSeconds(1f);
             Log.Info("AUTOTEST: new singleplayer game");
             SemiFunc.MainMenuSetSingleplayer();
             SemiFunc.MenuActionSingleplayerGame();
