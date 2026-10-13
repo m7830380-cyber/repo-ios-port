@@ -66,6 +66,7 @@ namespace RepoIOS
         float m_EdgeTime;
         int m_LookFinger = -1;
         Vector2 m_LookLast;
+        readonly Dictionary<int, Vector2> m_FingerPos = new Dictionary<int, Vector2>();
         readonly Dictionary<InputKey, int> m_Taps = new Dictionary<InputKey, int>();
 
         // menu pointer
@@ -95,6 +96,7 @@ namespace RepoIOS
             Func<bool> spectating = () => IsSpectating();
             Func<bool> alive = () => !IsSpectating();
 
+            // right thumb: GRAB (hold + drag = carry and aim) and the movement actions
             m_Grab = Add("GRAB", InputKey.Grab, 1, 0.26f, -1, 0.25f, 0.115f, alive);
             m_Grab.Look = true;
             Add("JUMP", InputKey.Jump, 1, 0.09f, -1, 0.31f, 0.08f, alive);
@@ -102,32 +104,34 @@ namespace RepoIOS
             m_Crouch.Latch = true;
             Add("TUMBLE", InputKey.Tumble, 1, 0.45f, -1, 0.10f, 0.06f, alive);
             Add("USE", InputKey.Interact, 1, 0.46f, -1, 0.29f, 0.065f, alive);
-            m_Rotate = Add("ROTATE", InputKey.Rotate, 1, 0.44f, -1, 0.47f, 0.065f, grabbing);
-            m_Rotate.Look = true;
-            var push = Add("PUSH", InputKey.Push, 1, 0.24f, -1, 0.50f, 0.055f, grabbing);
-            push.Repeat = true; push.RepeatDir = 1f;
-            var pull = Add("PULL", InputKey.Pull, 1, 0.12f, -1, 0.47f, 0.055f, grabbing);
-            pull.Repeat = true; pull.RepeatDir = -1f;
-            m_Sprint = Add("SPRINT", InputKey.Sprint, -1, 0.09f, -1, 0.55f, 0.055f, alive);
-            m_Sprint.Latch = true;
-
             Add("<", InputKey.SpectatePrevious, 1, 0.34f, -1, 0.20f, 0.07f, spectating);
             Add(">", InputKey.SpectateNext, 1, 0.14f, -1, 0.20f, 0.07f, spectating);
 
-            // top row
-            Add("MENU", InputKey.Menu, -1, 0.07f, 1, 0.07f, 0.045f, null);
-            var map = Add("MAP", InputKey.Map, -1, 0.18f, 1, 0.07f, 0.045f, alive);
+            // left thumb: SPRINT; while carrying something PULL / PUSH (wheel) and ROTATE (drag turns the object)
+            m_Sprint = Add("SPRINT", InputKey.Sprint, -1, 0.09f, -1, 0.42f, 0.055f, alive);
+            m_Sprint.Latch = true;
+            var pull = Add("PULL", InputKey.Pull, -1, 0.09f, -1, 0.62f, 0.055f, grabbing);
+            pull.Repeat = true; pull.RepeatDir = -1f;
+            var push = Add("PUSH", InputKey.Push, -1, 0.09f, -1, 0.80f, 0.055f, grabbing);
+            push.Repeat = true; push.RepeatDir = 1f;
+            m_Rotate = Add("ROTATE", InputKey.Rotate, -1, 0.25f, -1, 0.71f, 0.065f, grabbing);
+            m_Rotate.Look = true;
+
+            // top centre (clear of the game's health / goal display)
+            const float sp = 0.105f, top = 0.07f, r = 0.045f;
+            Add("MENU", InputKey.Menu, 0, -4 * sp, 1, top, r, null);
+            var map = Add("MAP", InputKey.Map, 0, -3 * sp, 1, top, r, alive);
             map.Latch = true;
-            Add("CHAT", InputKey.Chat, -1, 0.29f, 1, 0.07f, 0.045f, null);
-            Add("1", InputKey.Inventory1, 0, -0.11f, 1, 0.07f, 0.045f, alive);
-            Add("2", InputKey.Inventory2, 0, 0f, 1, 0.07f, 0.045f, alive);
-            Add("3", InputKey.Inventory3, 0, 0.11f, 1, 0.07f, 0.045f, alive);
-            m_Emote = AddHud(":)", 1, 0.62f, 1, 0.07f, 0.045f, () => m_EmotesOpen = !m_EmotesOpen, alive);
+            Add("CHAT", InputKey.Chat, 0, -2 * sp, 1, top, r, null);
+            Add("1", InputKey.Inventory1, 0, -1 * sp, 1, top, r, alive);
+            Add("2", InputKey.Inventory2, 0, 0f, 1, top, r, alive);
+            Add("3", InputKey.Inventory3, 0, 1 * sp, 1, top, r, alive);
+            m_Emote = AddHud(":)", 0, 2 * sp, 1, top, r, () => m_EmotesOpen = !m_EmotesOpen, alive);
             var exprKeys = new[] { InputKey.Expression1, InputKey.Expression2, InputKey.Expression3, InputKey.Expression4, InputKey.Expression5, InputKey.Expression6 };
             for (int i = 0; i < 6; i++)
-                Add("E" + (i + 1), exprKeys[i], 1, 0.62f, 1, 0.17f + i * 0.095f, 0.042f, () => m_EmotesOpen && !IsSpectating());
-            m_Gear = AddHud("SET", 1, 0.51f, 1, 0.07f, 0.045f, () => m_SettingsOpen = !m_SettingsOpen, null);
-            m_Hide = AddHud("HIDE", 1, 0.40f, 1, 0.07f, 0.045f, () => { Hidden = !Hidden; SaveSettings(); }, null);
+                Add("E" + (i + 1), exprKeys[i], 0, 2 * sp, 1, top + 0.10f + i * 0.095f, 0.042f, () => m_EmotesOpen && !IsSpectating());
+            m_Gear = AddHud("SET", 0, 3 * sp, 1, top, r, () => m_SettingsOpen = !m_SettingsOpen, null);
+            m_Hide = AddHud("HIDE", 0, 4 * sp, 1, top, r, () => { Hidden = !Hidden; SaveSettings(); }, null);
 
             m_Circle = MakeCircle(128, false);
             m_Ring = MakeCircle(128, true);
@@ -276,6 +280,7 @@ namespace RepoIOS
                     continue;
                 }
                 seen.Add(t.fingerId);
+                m_FingerPos[t.fingerId] = t.position;
                 if (t.phase == UnityEngine.TouchPhase.Began || !IsTracked(t.fingerId)) Begin(t.fingerId, t.position);
                 Move(t.fingerId, t.position);
             }
@@ -357,7 +362,8 @@ namespace RepoIOS
                 else if (hit.Latch || (hit == m_Grab && GrabToggle)) hit.Latched = !hit.Latched;
                 else if (!hit.Repeat && IsTapKey(hit.Key)) Tap(hit.Key);
                 if (hit.Repeat) hit.RepeatTimer = 0f;
-                if (hit.Look && m_LookFinger < 0) { m_LookFinger = id; m_LookLast = pos; }
+                // a second look button (ROTATE while GRAB is held) takes the drag over
+                if (hit.Look && (m_LookFinger < 0 || hit == m_Rotate)) { m_LookFinger = id; m_LookLast = pos; }
                 return;
             }
             if (Hidden) { /* hidden HUD: whole left half still moves, right half still looks */ }
@@ -393,7 +399,17 @@ namespace RepoIOS
         {
             foreach (var b in m_Buttons) if (b.Finger == id) b.Finger = -1;
             if (id == m_StickFinger) m_StickFinger = -1;
-            if (id == m_LookFinger) m_LookFinger = -1;
+            if (id == m_LookFinger)
+            {
+                m_LookFinger = -1;
+                // ROTATE released while GRAB is still held: the GRAB thumb aims again
+                if (m_Grab.Finger >= 0 && m_FingerPos.TryGetValue(m_Grab.Finger, out var p))
+                {
+                    m_LookFinger = m_Grab.Finger;
+                    m_LookLast = p;
+                }
+            }
+            m_FingerPos.Remove(id);
         }
 
         // ---- menus: finger = mouse ------------------------------------------------------------------
