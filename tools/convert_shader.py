@@ -164,9 +164,21 @@ def vertex_channels(refl):
     return smap, ch
 
 
+SHADOW_SAMPLER = (b'constexpr sampler _mtl_xl_shadow_sampler(address::clamp_to_edge, filter::linear, '
+                  b'compare_func::greater_equal);\n')
+
+
 def fix_msl(msl, is_vs):
     if is_vs:
         msl = msl.replace(b'[[ position ]]', b'[[ position, invariant ]]')
+    # Unity's iOS Metal runtime never sets a compare function on sampler states: depth compares must use an
+    # inline comparison sampler (what HLSLcc emits for HLSLCC_FLAG_MOBILE_TARGET). With the app's sampler,
+    # sample_compare always returns 0 and every shadow-casting light renders black.
+    fixed = re.sub(rb'\.(sample_compare|gather_compare)\(\s*[A-Za-z_][A-Za-z_0-9]*\s*,',
+                   rb'.\1(_mtl_xl_shadow_sampler,', msl)
+    if fixed != msl:
+        at = fixed.index(b'using namespace metal;\n') + len(b'using namespace metal;\n')
+        msl = fixed[:at] + SHADOW_SAMPLER + fixed[at:]
     return msl
 
 

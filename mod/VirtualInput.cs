@@ -220,7 +220,12 @@ namespace RepoIOS
                     if (string.IsNullOrEmpty(path) || b.isComposite || b.isPartOfComposite) continue;
                     if (path.StartsWith("<Keyboard>/", StringComparison.OrdinalIgnoreCase))
                     {
-                        if (InputControlPath.TryFindControl(Kb, path) is KeyControl kc) { key = kc.keyCode; break; }
+                        var ctl = InputControlPath.TryFindControl(Kb, path);
+                        if (ctl is KeyControl kc) { key = kc.keyCode; break; }
+                        // synthetic either-side keys (crouch is bound to "ctrl") are not KeyControls
+                        if (ctl == Kb.ctrlKey) { key = Key.LeftCtrl; break; }
+                        if (ctl == Kb.shiftKey) { key = Key.LeftShift; break; }
+                        if (ctl == Kb.altKey) { key = Key.LeftAlt; break; }
                     }
                     else if (path.StartsWith("<Mouse>/", StringComparison.OrdinalIgnoreCase))
                     {

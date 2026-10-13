@@ -13,7 +13,7 @@ localization .tsv files, go to Data/Raw (iOS StreamingAssets). Audio (.resource)
 Unity decodes in software on every platform) stay as they are.
 Nothing produced here may be committed to the public repo - it is derived from the game.
 """
-import argparse, hashlib, json, os, pickle, shutil, struct, sys, time, traceback
+import argparse, hashlib, json, os, pickle, re, shutil, struct, sys, time, traceback
 from concurrent.futures import ProcessPoolExecutor
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -27,7 +27,7 @@ PLAYER_FILES = ['globalgamemanagers', 'globalgamemanagers.assets', 'level0', 'le
                 'sharedassets0.assets', 'sharedassets1.assets', 'sharedassets2.assets', 'resources.assets',
                 'Resources/unity_builtin_extra']
 DEFAULT_GAME = r'C:\Program Files (x86)\Steam\steamapps\common\REPO'
-CONVERTER_VERSION = '1'   # bump to invalidate the shader cache
+CONVERTER_VERSION = '2'   # bump to invalidate the shader cache
 STREAMED = ('Texture2D', 'Cubemap', 'Texture2DArray', 'Texture3D', 'Mesh')
 CHUNK = 160               # textures in flight at once (memory bound)
 
@@ -246,6 +246,22 @@ def process_bundle(src, dst, cache_dir, work_dir, pool):
     return report
 
 
+def clear_bundle_crcs(extra_b64):
+    """Converted bundles no longer match the CRCs the catalog stores (Unity then refuses to load them).
+    The extra data holds UTF-16 JSON per bundle that entries address by byte offset, so "m_Crc":<n> is
+    rewritten in place as "m_Crc":0 padded with JSON whitespace to keep every offset intact."""
+    import base64
+    b = base64.b64decode(extra_b64)
+
+    def blank(m):
+        digits = m.group(1)
+        return '"m_Crc":0'.encode('utf-16-le') + b' \x00' * (len(digits) // 2 - 1)
+
+    b, n = re.subn(rb'"\x00m\x00_\x00C\x00r\x00c\x00"\x00:\x00((?:[0-9]\x00)+)', blank, b)
+    log(f'catalog: cleared {n} bundle CRCs')
+    return base64.b64encode(b).decode('ascii')
+
+
 def convert_streaming_assets(game_data, out_raw, cache_dir, work_dir, pool, full_report):
     sa = os.path.join(game_data, 'StreamingAssets')
     for root, _, files in os.walk(sa):
@@ -264,6 +280,7 @@ def convert_streaming_assets(game_data, out_raw, cache_dir, work_dir, pool, full
     if os.path.exists(cat):
         c = json.load(open(cat, encoding='utf8'))
         c['m_InternalIds'] = [i.replace('\\', '/') for i in c['m_InternalIds']]
+        c['m_ExtraDataString'] = clear_bundle_crcs(c['m_ExtraDataString'])
         json.dump(c, open(cat, 'w', encoding='utf8'), separators=(',', ':'))
     st = os.path.join(out_raw, 'aa', 'settings.json')
     if os.path.exists(st):
